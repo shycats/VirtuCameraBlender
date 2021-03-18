@@ -37,7 +37,7 @@ import mathutils
 # VirtuCamera core lib
 from . import virtucamera
 
-plugin_version = (1, 0, 0)
+plugin_version = (1, 0, 1)
 
 class VirtuCameraBlender(virtucamera.Server):
     _TRANSFORM_CHANNELS = ("location", "rotation_euler", "rotation_quaternion", "rotation_axis_angle")
@@ -53,6 +53,14 @@ class VirtuCameraBlender(virtucamera.Server):
         (0,-1, 0, 0),
         (0, 0, 0, 1)
     ))
+    last_rect_data = None
+
+    def camera_rect_changed(self, offset_value_x, offset_value_y, zoom_value, region_rect, camera_aspect_ratio):
+        rect_data = (offset_value_x, offset_value_y, zoom_value, region_rect, camera_aspect_ratio)
+        if self.last_rect_data != rect_data:
+            self.last_rect_data = rect_data
+            return True
+        return False
 
     def view_zoom_factor(self, zoom_value):
         return ((zoom_value / 50 + math.sqrt(2)) / 2) ** 2
@@ -63,7 +71,6 @@ class VirtuCameraBlender(virtucamera.Server):
     def view_offset_factor(self, offset_value, zoom_factor):
         return offset_value * zoom_factor * -2
 
-    # FIXME!!: Check if zoom, offset, resolution, aspect or region size/pos changes and return cached rect otherwise
     def get_view_camera_rect(self):
         scene = bpy.context.scene
         render = scene.render
@@ -71,31 +78,36 @@ class VirtuCameraBlender(virtucamera.Server):
         region = context['region']
         r3d = context['space_data'].region_3d
 
+        zoom_value = r3d.view_camera_zoom
         offset_value_x = r3d.view_camera_offset[0]
         offset_value_y = r3d.view_camera_offset[1]
-        zoom_value = r3d.view_camera_zoom
-
+        region_rect = (region.x, region.y, region.width, region.height)
         camera_aspect_ratio = (render.resolution_x * render.pixel_aspect_x) / (render.resolution_y * render.pixel_aspect_y)
-        region_aspect_ratio = region.width / region.height
 
-        zoom_factor = self.view_zoom_factor(zoom_value)
+        # Check if zoom, offset, aspect or region size/pos changes and return cached rect otherwise
+        if self.camera_rect_changed(offset_value_x, offset_value_y, zoom_value, region_rect, camera_aspect_ratio):
+            region_aspect_ratio = region.width / region.height
 
-        width_factor = self.view_region_width_zoom_factor(zoom_factor, region_aspect_ratio, camera_aspect_ratio)
-        width = int(region.width * width_factor)
-        height = int(width / camera_aspect_ratio)
+            zoom_factor = self.view_zoom_factor(zoom_value)
 
-        offset_factor_x = self.view_offset_factor(offset_value_x, zoom_factor)
-        offset_factor_y = self.view_offset_factor(offset_value_y, zoom_factor)
-        x = int(region.x + (region.width - width) * 0.5 + region.width * offset_factor_x)
-        y = int(region.y + (region.height - height) * 0.5 + region.height * offset_factor_y)
+            width_factor = self.view_region_width_zoom_factor(zoom_factor, region_aspect_ratio, camera_aspect_ratio)
+            width = int(region.width * width_factor)
+            height = int(width / camera_aspect_ratio)
 
-        # Clamp values to region rect
-        width = min(width, region.width)
-        height = min(height, region.height)
-        x = min(max(x, region.x), region.x + region.width - width)
-        y = min(max(y, region.y), region.y + region.height - height)
+            offset_factor_x = self.view_offset_factor(offset_value_x, zoom_factor)
+            offset_factor_y = self.view_offset_factor(offset_value_y, zoom_factor)
+            x = int(region.x + (region.width - width) * 0.5 + region.width * offset_factor_x)
+            y = int(region.y + (region.height - height) * 0.5 + region.height * offset_factor_y)
 
-        return (x, y, width, height)
+            # Clamp values to region rect
+            width = min(width, region.width)
+            height = min(height, region.height)
+            x = min(max(x, region.x), region.x + region.width - width)
+            y = min(max(y, region.y), region.y + region.height - height)
+
+            self.last_rect = (x, y, width, height)
+
+        return self.last_rect
 
     def init_capture_buffer(self, width, height):
         self.buffer = bgl.Buffer(bgl.GL_BYTE, [4, width * height])
@@ -157,7 +169,8 @@ class VirtuCameraBlender(virtucamera.Server):
     def get_scene_cameras(self):
         scene_cameras = []
         for obj in bpy.data.objects:
-            if obj.type == "CAMERA":
+            # Filter invisible cameras, as euler filter only works on visible cameras.
+            if obj.type == "CAMERA" and obj.visible_get():
                 scene_cameras.append(obj)
         camera_names = [camera.name for camera in scene_cameras]
         return camera_names
@@ -218,7 +231,10 @@ class VirtuCameraBlender(virtucamera.Server):
 
     # Return True if the specified camera_name exists in the scene
     def get_camera_exists(self, camera_name):
-        return camera_name in bpy.data.objects
+        # Filter invisible cameras, as euler filter only works on visible cameras.
+        if camera_name in bpy.data.objects and bpy.data.objects[camera_name].visible_get():
+            return True
+        return False
 
     # ------------------------------------------------------------------------
     #    SETTER CALLBACKS
@@ -326,7 +342,7 @@ class VirtuCameraBlender(virtucamera.Server):
     def look_through_camera(self, camera_name):
         camera = bpy.data.objects[camera_name]
         context = bpy.context.scene.virtucamera.contexts['start']
-        context['scene'].camera = camera
+        bpy.context.scene.camera = camera
         context['space_data'].region_3d.view_perspective = 'CAMERA'
 
 

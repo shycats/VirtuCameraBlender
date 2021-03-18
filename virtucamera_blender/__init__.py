@@ -27,7 +27,7 @@ bl_info = {
     "author" : "Pablo Garcia",
     "description" : "Live camera motion capture",
     "blender" : (2, 80, 0),
-    "version" : (1, 0, 0),
+    "version" : (1, 0, 1),
     "location" : "3D View > VirtuCamera",
     "warning" : "",
     "category" : "3D View"
