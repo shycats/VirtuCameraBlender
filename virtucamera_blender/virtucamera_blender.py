@@ -34,26 +34,32 @@ import bpy.utils.previews
 import bgl
 import mathutils
 
-# VirtuCamera core lib
-from . import virtucamera
+# VirtuCamera API
+from .virtucamera import VCBase, VCServer
 
-plugin_version = (1, 0, 1)
+plugin_version = (1, 0, 2)
 
-class VirtuCameraBlender(virtucamera.Server):
-    _TRANSFORM_CHANNELS = ("location", "rotation_euler", "rotation_quaternion", "rotation_axis_angle")
-    _B_TO_V_ROTATION_MAT = mathutils.Matrix((
+class VirtuCameraBlender(VCBase):
+    # Constants
+    TRANSFORM_CHANNELS = ("location", "rotation_euler", "rotation_quaternion", "rotation_axis_angle")
+    B_TO_V_ROTATION_MAT = mathutils.Matrix((
         (1, 0, 0, 0),
         (0, 0,-1, 0),
         (0, 1, 0, 0),
         (0, 0, 0, 1)
     ))
-    _V_TO_B_ROTATION_MAT = mathutils.Matrix((
+    V_TO_B_ROTATION_MAT = mathutils.Matrix((
         (1, 0, 0, 0),
         (0, 0, 1, 0),
         (0,-1, 0, 0),
         (0, 0, 0, 1)
     ))
+
+    # Cached Viewport capture rect
     last_rect_data = None
+
+
+    # -- Utility Functions ------------------------------------
 
     def camera_rect_changed(self, offset_value_x, offset_value_y, zoom_value, region_rect, camera_aspect_ratio):
         rect_data = (offset_value_x, offset_value_y, zoom_value, region_rect, camera_aspect_ratio)
@@ -141,32 +147,133 @@ class VirtuCameraBlender(virtucamera.Server):
         # Get the actual pointer value as a Python Int
         self.buffer_pointer = (ctypes.c_void_p).from_address(buffer_pointer_addr).value
 
-    # Override this function to make it return what Blender Timer expects
-    def execute_pending_callbacks(self):
-        super().execute_pending_callbacks()
-        if self.is_event_loop_running:
-            return 0.0 # Call again as soon as possible
-        else:
-            return None # Stop calling this function
 
-    # ------------------------------------------------------------------------
-    #    GETTER CALLBACKS
-    # ------------------------------------------------------------------------
+    # SCENE STATE RELATED METHODS:
+    # ---------------------------
 
-    # Must return a tuple with (current_frame, range_start, range_end)
-    def get_playback_state(self):
+    def get_playback_state(self, vcserver):
+        """ Must Return the playback state of the scene as a tuple or list
+        in the following order: (current_frame, range_start, range_end)
+        * current_frame (float) - The current frame number.
+        * range_start (float) - Animation range start frame number.
+        * range_end (float) - Animation range end frame number.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+
+        Returns
+        -------
+        tuple or list of 3 floats
+            playback state as (current_frame, range_start, range_end)
+        """
+
         current_frame = bpy.context.scene.frame_current
         range_start = bpy.context.scene.frame_start
         range_end = bpy.context.scene.frame_end
         return (current_frame, range_start, range_end)
 
-    # Must return a float with the focal length value for the specified camera
-    def get_camera_focal_length(self, camera_name):
-        camera_data = bpy.data.objects[camera_name].data
-        return camera_data.lens
 
-    # Must return a list of camera names in the scene
-    def get_scene_cameras(self):
+    def get_playback_fps(self, vcserver):
+        """ Must return a float value with the scene playback rate
+        in Frames Per Second.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+
+        Returns
+        -------
+        float
+            scene playback rate in FPS.
+        """
+
+        return bpy.context.scene.render.fps
+
+
+    def set_frame(self, vcserver, frame):
+        """ Must set the current frame number on the scene
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        frame : float
+            The current frame number.
+        """
+
+        bpy.context.scene.frame_current = frame
+
+
+    def set_playback_range(self, vcserver, start, end):
+        """ Must set the animation frame range on the scene
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        start : float
+            Animation range start frame number.
+        end : float
+            Animation range end frame number.
+        """
+
+        bpy.context.scene.frame_start = start
+        bpy.context.scene.frame_end = end
+
+
+    def start_playback(self, vcserver, forward):
+        """ This method must start the playback of animation in the scene.
+        Not used at the moment, but must be implemented just in case
+        the app starts using it in the future. At the moment
+        VCBase.set_frame() is called instead.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        forward : bool
+            if True, play the animation forward, if False, play it backwards.
+        """
+
+        if not bpy.context.screen.is_animation_playing:
+            # This operator acts like a toggle, so we need to first check if it's playing
+            bpy.ops.screen.animation_play(reverse=(not forward), sync=True)
+
+
+    def stop_playback(self, vcserver):
+        """ This method must stop the playback of animation in the scene.
+        Not used at the moment, but must be implemented just in case
+        the app starts using it in the future.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        """
+
+        bpy.ops.screen.animation_cancel(restore_frame=False)
+
+
+    # CAMERA RELATED METHODS:
+    # -----------------------
+
+    def get_scene_cameras(self, vcserver):
+        """ Must Return a list or tuple with the names of all the scene cameras.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+
+        Returns
+        -------
+        tuple or list
+            names of all the scene cameras.
+        """
+
         scene_cameras = []
         for obj in bpy.data.objects:
             # Filter invisible cameras, as euler filter only works on visible cameras.
@@ -175,48 +282,57 @@ class VirtuCameraBlender(virtucamera.Server):
         camera_names = [camera.name for camera in scene_cameras]
         return camera_names
 
-    # Must return a tuple or list with the 4x4 transform matrix of the specified camera
-    def get_camera_matrix(self, camera_name):
-        camera_matrix = bpy.data.objects[camera_name].matrix_local.transposed()
-        # VirtuCamera is Y+ up axis while Blender is Z+ up, so we rotate the transform matrix
-        camera_matrix @= self._B_TO_V_ROTATION_MAT
-        camera_matrix_tuple = (
-            *camera_matrix[0],
-            *camera_matrix[1],
-            *camera_matrix[2],
-            *camera_matrix[3]
-        )
-        return camera_matrix_tuple
 
-    # If capture_mode == CAPMODE_IMAGE_BGRA_CPTR,
-    # it must return an integer value with the memory address to the BGRA buffer
-    def get_capture_pointer(self, camera_name):
-        (x, y, width, height) = self.get_view_camera_rect()
+    def get_camera_exists(self, vcserver, camera_name):
+        """ Must Return True if the specified camera exists in the scene,
+        False otherwise.
 
-        # If resolution has changed, we need to notify Virtucamera.Server the new resolution
-        # with set_capture_resolution() and create a new Blender capture buffer
-        if width != self.capture_width or height != self.capture_height:
-            self.set_capture_resolution(width, height)
-            self.init_capture_buffer(width, height)
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        camera_name : str
+            Name of the camera to check for.
 
-        framebuffer = bgl.Buffer(bgl.GL_INT, 1)
-        bgl.glGetIntegerv(bgl.GL_DRAW_FRAMEBUFFER_BINDING, framebuffer)
-        bgl.glBindFramebuffer(bgl.GL_FRAMEBUFFER, framebuffer[0])
-        bgl.glReadPixels(x, y, width, height, bgl.GL_BGRA, bgl.GL_UNSIGNED_BYTE, self.buffer)
-        return self.buffer_pointer
+        Returns
+        -------
+        bool
+            'True' if the camera 'camera_name' exists, 'False' otherwise.
+        """
 
-    # Must return a float value with scene playback FPS
-    def get_play_fps(self):
-        return bpy.context.scene.render.fps
+        # Filter invisible cameras, as euler filter only works on visible cameras.
+        if camera_name in bpy.data.objects and bpy.data.objects[camera_name].visible_get():
+            return True
+        return False
 
-    # Must return a tuple with (transform_has_keys, focal_length_has_keys)
-    def get_camera_has_keys(self, camera_name):
+
+    def get_camera_has_keys(self, vcserver, camera_name):
+        """ Must Return whether the specified camera has animation keyframes
+        in the transform or flocal length parameters, as a tuple or list,
+        in the following order: (transform_has_keys, focal_length_has_keys)
+        * transform_has_keys (bool) - True if the transform has keyframes.
+        * focal_length_has_keys (bool) - True if the flen has keyframes.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        camera_name : str
+            Name of the camera to check for.
+
+        Returns
+        -------
+        tuple or list of 2 bool
+            whether the camera 'camera_name' has keys or not as
+            (transform_has_keys, focal_length_has_keys)
+        """
+
         camera = bpy.data.objects[camera_name]
         
         transform_has_keys = False
         if camera.animation_data and camera.animation_data.action:
             for fcu in camera.animation_data.action.fcurves:
-                if fcu.data_path in self._TRANSFORM_CHANNELS:
+                if fcu.data_path in self.TRANSFORM_CHANNELS:
                     transform_has_keys = True
                     break
         
@@ -229,25 +345,111 @@ class VirtuCameraBlender(virtucamera.Server):
 
         return (transform_has_keys, focal_length_has_keys)
 
-    # Return True if the specified camera_name exists in the scene
-    def get_camera_exists(self, camera_name):
-        # Filter invisible cameras, as euler filter only works on visible cameras.
-        if camera_name in bpy.data.objects and bpy.data.objects[camera_name].visible_get():
-            return True
-        return False
 
-    # ------------------------------------------------------------------------
-    #    SETTER CALLBACKS
-    # ------------------------------------------------------------------------
+    def get_camera_focal_length(self, vcserver, camera_name):
+        """ Must Return the focal length value of the specified camera.
 
-    def set_playback_range(self, start, end):
-        bpy.context.scene.frame_start = start
-        bpy.context.scene.frame_end = end
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        camera_name : str
+            Name of the camera to get the data from.
 
-    def set_frame(self, frame):
-        bpy.context.scene.frame_current = frame
+        Returns
+        -------
+        float
+            focal length value of the camera 'camera_name'.
+        """
 
-    def set_camera_matrix(self, camera_name, transform_matrix):
+        camera_data = bpy.data.objects[camera_name].data
+        return camera_data.lens
+
+
+    def get_camera_transform(self, vcserver, camera_name):
+        """ Must return a tuple or list of 16 floats with the 4x4
+        transform matrix of the specified camera.
+
+        * The up axis must be Y+
+        * The order must be:
+            (rxx, rxy, rxz, 0,
+            ryx, ryy, ryz, 0,
+            rzx, rzy, rzz, 0,
+            tx,  ty,  tz,  1)
+            Being 'r' rotation and 't' translation,
+
+        Is your responsability to rotate or transpose the matrix if needed,
+        most 3D softwares offer fast APIs to do so.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        camera_name : str
+            Name of the camera to get the data from.
+
+        Returns
+        -------
+        tuple or list of 16 float
+            4x4 transform matrix as
+            (rxx, rxy, rxz, 0, ryx, ryy, ryz, 0, rzx, rzy, rzz, 0 , tx, ty, tz, 1)
+        """
+
+        camera_matrix = bpy.data.objects[camera_name].matrix_local.transposed()
+        # Blender is Z+ up, so we rotate the transform matrix
+        camera_matrix @= self.B_TO_V_ROTATION_MAT
+        camera_matrix_tuple = (
+            *camera_matrix[0],
+            *camera_matrix[1],
+            *camera_matrix[2],
+            *camera_matrix[3]
+        )
+        return camera_matrix_tuple
+
+
+    def set_camera_focal_length(self, vcserver, camera_name, focal_length):
+        """ Must set the focal length of the specified camera.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        camera_name : str
+            Name of the camera to set the focal length to.
+        focal_length : float
+            focal length value to be set on the camera 'camera_name'
+        """
+
+        camera_data = bpy.data.objects[camera_name].data
+        camera_data.lens = focal_length
+
+
+    def set_camera_transform(self, vcserver, camera_name, transform_matrix):
+        """  Must set the transform of the specified camera.
+        The transform matrix is provided as a tuple of 16 floats
+        with a 4x4 transform matrix.
+
+        * The up axis is Y+
+        * The order is:
+            (rxx, rxy, rxz, 0,
+            ryx, ryy, ryz, 0,
+            rzx, rzy, rzz, 0,
+            tx,  ty,  tz,  1)
+            Being 'r' rotation and 't' translation,
+
+        Is your responsability to rotate or transpose the matrix if needed,
+        most 3D softwares offer fast APIs to do so.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        camera_name : str
+            Name of the camera to set the transform to.
+        transform_matrix : tuple of 16 floats
+            transformation matrix to be set on the camera 'camera_name'
+        """
+
         camera = bpy.data.objects[camera_name]
         matrix = mathutils.Matrix((
             transform_matrix[0:4],
@@ -255,77 +457,97 @@ class VirtuCameraBlender(virtucamera.Server):
             transform_matrix[8:12],
             transform_matrix[12:16]
         ))
-        matrix @= self._V_TO_B_ROTATION_MAT
+        # Blender is Z+ up, so we rotate the transform matrix
+        matrix @= self.V_TO_B_ROTATION_MAT
         matrix.transpose()
         camera.matrix_local = matrix
 
-    def set_camera_flen(self, camera_name, focal_length):
-        camera_data = bpy.data.objects[camera_name].data
-        camera_data.lens = focal_length
 
-    def set_camera_matrix_keys(self, camera_name, keyframes, transform_matrix_values):
-        camera = bpy.data.objects[camera_name]
-        for keyframe, matrix in zip(keyframes, transform_matrix_values):
-            self.set_camera_matrix(camera_name, matrix)
-            camera.keyframe_insert('location', frame=keyframe)
-            camera.keyframe_insert('rotation_euler', frame=keyframe)
-        bpy.ops.graph.virtucamera_euler_filter(object_name=camera_name)
+    def set_camera_flen_keys(self, vcserver, camera_name, keyframes, focal_length_values):
+        """ Must set keyframes on the focal length of the specified camera.
+        The frame numbers are provided as a tuple of floats and
+        the focal length values are provided as a tuple of floats
+        with a focal length value for every keyframe.
 
+        The first element of the 'keyframes' tuple corresponds to the first
+        element of the 'focal_length_values' tuple, the second to the second,
+        and so on.
 
-    def set_camera_flen_keys(self, camera_name, keyframes, focal_length_values):
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        camera_name : str
+            Name of the camera to set the keyframes to.
+        keyframes : tuple of floats
+            Frame numbers to create the keyframes on.
+        focal_length_values : tuple of floats
+            focal length values to be set as keyframes on the camera 'camera_name'
+        """
+
         camera_data = bpy.data.objects[camera_name].data
         for keyframe, focal_length in zip(keyframes, focal_length_values):
             camera_data.lens = focal_length
             camera_data.keyframe_insert('lens', frame=keyframe)
 
-    # ------------------------------------------------------------------------
-    #    ACTION CALLBACKS
-    # ------------------------------------------------------------------------
 
-    def client_connected(self, client_ip, client_port):
-        bpy.ops.view3d.virtucamera_redraw()
+    def set_camera_transform_keys(self, vcserver, camera_name, keyframes, transform_matrix_values):
+        """ Must set keyframes on the transform of the specified camera.
+        The frame numbers are provided as a tuple of floats and
+        the transform matrixes are provided as a tuple of tuples of 16 floats
+        with 4x4 transform matrixes, with a matrix for every keyframe.
 
-    def client_disconnected(self):
-        bpy.ops.view3d.virtucamera_redraw()
+        The first element of the 'keyframes' tuple corresponds to the first
+        element of the 'transform_matrix_values' tuple, the second to the second,
+        and so on.
 
-    def current_camera_changed(self, current_camera):
-        bpy.ops.view3d.virtucamera_redraw()
+        * The up axis is Y+
+        * The order is:
+            (rxx, rxy, rxz, 0,
+            ryx, ryy, ryz, 0,
+            rzx, rzy, rzz, 0,
+            tx,  ty,  tz,  1)
+            Being 'r' rotation and 't' translation,
 
-    # Calling set_capture_resolution() and set_capture_mode() here is mandatory.
-    # You can call set_vertical_flip() here optionally, by default is False.
-    def streaming_will_start(self):
-        # Workaround to support multiprocessing in Blender 2.91+
-        # as it's broken. sys.executable points to the
-        # Python executable instead of the Blender executable, so
-        # we revert it back.
-        sys.executable = bpy.app.binary_path
+        Is your responsability to rotate or transpose the matrixes if needed,
+        most 3D softwares offer fast APIs to do so.
 
-        (x, y, width, height) = self.get_view_camera_rect()
-        self.set_capture_resolution(width, height)
-        self.set_capture_mode(self.CAPMODE_IMAGE_BGRA_CPTR)
-        self.set_vertical_flip(True)
-        self.init_capture_buffer(width, height)
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        camera_name : str
+            Name of the camera to set the keyframes to.
+        keyframes : tuple of floats
+            Frame numbers to create the keyframes on.
+        transform_matrix_values : tuple of tuples of 16 floats
+            transformation matrixes to be set as keyframes on the camera 'camera_name'
+        """
 
-    def streaming_did_end(self):
-        del self.buffer
+        camera = bpy.data.objects[camera_name]
+        for keyframe, matrix in zip(keyframes, transform_matrix_values):
+            self.set_camera_transform(vcserver, camera_name, matrix)
+            camera.keyframe_insert('location', frame=keyframe)
+            camera.keyframe_insert('rotation_euler', frame=keyframe)
+        bpy.ops.graph.virtucamera_euler_filter(object_name=camera_name)
 
-    def start_playback(self, forward):
-        if not bpy.context.screen.is_animation_playing:
-            # This operator acts like a toggle, so we need to first check if it's playing
-            bpy.ops.screen.animation_play(reverse=(not forward), sync=True)
 
-    def stop_playback(self):
-        bpy.ops.screen.animation_cancel(restore_frame=False)
+    def remove_camera_keys(self, vcserver, camera_name):
+        """ This method must remove all transform
+        and focal length keyframes in the specified camera.
 
-    def switch_playback(self, forward):
-        # This operator acts like a toggle, so it actually switches playback state.
-        bpy.ops.screen.animation_play(reverse=(not forward), sync=True)
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        camera_name : str
+            Name of the camera to remove the keyframes from.
+        """
 
-    def remove_camera_keys(self, camera_name):
         camera = bpy.data.objects[camera_name]
         if camera.animation_data and camera.animation_data.action:
             for fcu in camera.animation_data.action.fcurves:
-                if fcu.data_path in self._TRANSFORM_CHANNELS:
+                if fcu.data_path in self.TRANSFORM_CHANNELS:
                     camera.animation_data.action.fcurves.remove(fcu)
         
         if camera.data.animation_data and camera.data.animation_data.action:
@@ -334,17 +556,189 @@ class VirtuCameraBlender(virtucamera.Server):
                     camera.data.animation_data.action.fcurves.remove(fcu)
                     break
 
-    # Must return the new camera_name
-    def create_new_camera(self):
+
+    def create_new_camera(self, vcserver):
+        """ This method must create a new camera in the scene
+        and return its name.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+
+        Returns
+        -------
+        str
+            Newly created camera name.
+        """
+
         bpy.ops.object.camera_add(enter_editmode=False)
         return bpy.context.scene.objects[-1].name
 
-    def look_through_camera(self, camera_name):
+
+    # VIEWPORT CAPTURE RELATED METHODS:
+    # ---------------------------------
+
+    def capture_will_start(self, vcserver):
+        """ This method is called whenever a client app requests a video
+        feed from the viewport. Usefull to init a pixel buffer
+        or other objects you may need to capture the viewport
+
+        IMPORTANT! Calling vcserver.set_capture_resolution() and
+        vcserver.set_capture_mode() here is a must. Please check
+        the documentation for those methods.
+
+        You can also call vcserver.set_vertical_flip() here optionally,
+        if you need to flip your pixel buffer. Disabled by default.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        """
+
+        (x, y, width, height) = self.get_view_camera_rect()
+        self.init_capture_buffer(width, height)
+        vcserver.set_capture_resolution(width, height)
+        vcserver.set_capture_mode(vcserver.CAPMODE_BUFFER_POINTER, vcserver.CAPFORMAT_UBYTE_BGRA)
+        vcserver.set_vertical_flip(True)
+
+
+    def capture_did_end(self, vcserver):
+        """ Optional, this method is called whenever a client app
+        stops the viewport video feed. Usefull to destroy a pixel buffer
+        or other objects you may have created to capture the viewport.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        """
+
+        del self.buffer
+
+
+    def get_capture_pointer(self, vcserver, camera_name):
+        """ If vcserver.capture_mode == vcserver.CAPMODE_BUFFER_POINTER,
+        it must return an int representing a memory address to the first
+        element of a contiguous buffer containing raw pixels of the 
+        viewport image. The buffer must be kept allocated untill the next
+        call to this function, is your responsability to do so.
+        If you don't use CAPMODE_BUFFER_POINTER
+        you don't need to overload this method.
+
+        If the capture resolution has changed in size from the previous call to
+        this method, vcserver.set_capture_resolution() must be called here
+        before returning. You can use vcserver.capture_width and
+        vcserver.capture_height to check the previous resolution.
+
+        The name of the camera selected in the app is provided,
+        as can be usefull to set-up the viewport render in some cases.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        camera_name : str
+            Name of the camera that is currently selected in the App.
+
+        Returns
+        -------
+        int
+            value of the memory address to the first element of the buffer.
+        """
+
+        (x, y, width, height) = self.get_view_camera_rect()
+
+        if width != vcserver.capture_width or height != vcserver.capture_height:
+            vcserver.set_capture_resolution(width, height)
+            self.init_capture_buffer(width, height)
+
+        framebuffer = bgl.Buffer(bgl.GL_INT, 1)
+        bgl.glGetIntegerv(bgl.GL_DRAW_FRAMEBUFFER_BINDING, framebuffer)
+        bgl.glBindFramebuffer(bgl.GL_FRAMEBUFFER, framebuffer[0])
+        bgl.glReadPixels(x, y, width, height, bgl.GL_BGRA, bgl.GL_UNSIGNED_BYTE, self.buffer)
+        return self.buffer_pointer
+
+
+    def look_through_camera(self, vcserver, camera_name):
+        """ This method must set the viewport to look through
+        the specified camera.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        camera_name : str
+            Name of the camera to look through
+        """
+
         camera = bpy.data.objects[camera_name]
         context = bpy.context.scene.virtucamera.contexts['start']
         bpy.context.scene.camera = camera
         context['space_data'].region_3d.view_perspective = 'CAMERA'
 
+
+    # APP/SERVER FEEDBACK METHODS:
+    # ---------------------------
+
+    def client_connected(self, vcserver, client_ip, client_port):
+        """ Optional, this method is called whenever a client app
+        connects to the server. Usefull to give the user
+        feedback about a successfull connection.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        client_ip : str
+            ip address of the remote client
+        client_port : int
+            port number of the remote client
+        """
+
+        bpy.ops.view3d.virtucamera_redraw()
+
+
+    def client_disconnected(self, vcserver):
+        """ Optional, this method is called whenever a client app
+        disconnects from the server, even if it's disconnected by calling
+        stop_serving() with the virtucamera.VCServer API. Usefull to give
+        the user feedback about the disconnection.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        """
+
+        bpy.ops.view3d.virtucamera_redraw()
+
+
+    def current_camera_changed(self, vcserver, current_camera):
+        """ Optional, this method is called when the user selects
+        a different camera from the app. Usefull to give the user
+        feedback about the currently selected camera.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        current_camera : str
+            Name of the new selected camera
+        """
+
+        bpy.ops.view3d.virtucamera_redraw()
+
+
+# Blender will call this function regularly to keep VCServer working in the background
+def timer_function():
+    vcserver = bpy.context.scene.virtucamera.server
+    vcserver.execute_pending_events()
+    if vcserver.is_event_loop_running:
+        return 0.0 # Call again as soon as possible
+    else:
+        return None # Stop calling this function
 
 class VirtuCameraState(bpy.types.PropertyGroup):
     tcp_port: bpy.props.IntProperty(
@@ -354,10 +748,11 @@ class VirtuCameraState(bpy.types.PropertyGroup):
         min = 0,
         max = 65535
     )
-    server = VirtuCameraBlender(
+    server = VCServer(
         platform = "Blender",
         plugin_version = plugin_version,
-        event_mode = VirtuCameraBlender.EVENTMODE_PULL
+        event_mode = VCServer.EVENTMODE_PULL,
+        vcbase = VirtuCameraBlender()
     )
     custom_icons = bpy.utils.previews.new()
     contexts = dict()
@@ -378,7 +773,7 @@ class VIEW3D_OT_virtucamera_start(bpy.types.Operator):
         server.start_serving(state.tcp_port)
         if not server.is_serving:
             return {'FINISHED'}
-        bpy.app.timers.register(server.execute_pending_callbacks)
+        bpy.app.timers.register(timer_function)
         file_path = os.path.join(os.path.dirname(__file__), 'virtucamera_qr_img.png')
         server.write_qr_image_png(file_path, 3)
         state.custom_icons.clear()
