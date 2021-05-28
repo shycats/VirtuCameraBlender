@@ -37,7 +37,7 @@ import mathutils
 # VirtuCamera API
 from .virtucamera import VCBase, VCServer
 
-plugin_version = (1, 0, 2)
+plugin_version = (1, 0, 3)
 
 class VirtuCameraBlender(VCBase):
     # Constants
@@ -726,6 +726,22 @@ class VirtuCameraBlender(VCBase):
             Instance of virtucamera.VCServer calling this method.
         current_camera : str
             Name of the new selected camera
+        """
+
+        bpy.ops.view3d.virtucamera_redraw()
+
+
+    def server_did_stop(self, vcserver):
+        """ Optional, calling stop_serving() on virtucamera.VCServer
+        doesn't instantly stop the server, it is done in the background
+        due to the asyncronous nature of some of its processes.
+        This method is called when all services have been completely
+        stopped.
+
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
         """
 
         bpy.ops.view3d.virtucamera_redraw()
