@@ -27,6 +27,7 @@ import os
 import sys
 import math
 import ctypes
+import traceback
 
 # Blender modules
 import bpy
@@ -37,7 +38,7 @@ import mathutils
 # VirtuCamera API
 from .virtucamera import VCBase, VCServer
 
-plugin_version = (1, 0, 3)
+plugin_version = (1, 1, 0)
 
 class VirtuCameraBlender(VCBase):
     # Constants
@@ -146,6 +147,23 @@ class VirtuCameraBlender(VCBase):
         buffer_pointer_addr = id(self.buffer) + buffer_obj_size - buffer_pointer_size
         # Get the actual pointer value as a Python Int
         self.buffer_pointer = (ctypes.c_void_p).from_address(buffer_pointer_addr).value
+
+    def get_script_files(self):
+        scripts_dir = bpy.context.scene.virtucamera.custom_scripts_dir
+        if not os.path.isdir(scripts_dir):
+            return []
+        dir_files = os.listdir(scripts_dir)
+        dir_files.sort()
+
+        valid_files = []
+        for file in dir_files:
+            if file.endswith(".py"):
+                filepath = os.path.join(scripts_dir, file)
+                if os.path.isdir(filepath):
+                    continue
+                valid_files.append(filepath)
+
+        return valid_files
 
 
     # SCENE STATE RELATED METHODS:
@@ -747,6 +765,97 @@ class VirtuCameraBlender(VCBase):
         bpy.ops.view3d.virtucamera_redraw()
 
 
+    # CUSTOM SCRIPT METHODS:
+    # ----------------------
+
+    def get_script_labels(self, vcserver):
+        """ Optionally Return a list or tuple of str with the labels of
+        custom scripts to be called from VirtuCamera App. Each label is
+        a string that identifies the script that will be showed
+        as a button in the App.
+        The order of the labels is important. Later if the App asks
+        to execute a script, an index based on this order will be provided
+        to VCBase.execute_script(), so that method must also be implemented.
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        Returns
+        -------
+        tuple or list of str
+            custom script labels.
+        """
+        script_files = self.get_script_files()
+
+        labels = []
+        for filepath in script_files:
+            filename = os.path.split(filepath)[1]
+            tokens = filename.split("_")
+            if len(tokens) > 1 and tokens[0].isdigit():
+                prefix_len = len(tokens[0])
+                label = filename[prefix_len+1:-3]
+                labels.append(label)
+            else:
+                label = filename[:-3]
+                labels.append(label)
+
+        return labels
+                
+
+    def execute_script(self, vcserver, script_index, current_camera):
+        """ Only required if VCBase.get_script_labels()
+        has been implemented. This method is called whenever the user
+        taps on a custom script button in the app.
+        
+        Each of the labels returned from VCBase.get_script_labels()
+        identify a custom script that is showed as a button in the app.
+        The order of the labels is important and 'script_index' is a 0-based
+        index representing what script to execute from that list/tuple.
+        This function must return True if the script executed correctly,
+        False if there where errors. It's recommended to print any errors,
+        so that the user has some feedback about what went wrong.
+        You may want to provide a way for the user to refer to the currently
+        selected camera in their scripts, so that they can act over it.
+        'current_camera' is provided for this situation.
+        Parameters
+        ----------
+        vcserver : virtucamera.VCServer object
+            Instance of virtucamera.VCServer calling this method.
+        script_index : int
+            Script number to be executed.
+        current_camera : str
+            Name of the currently selected camera
+        """
+        script_files = self.get_script_files()
+
+        if script_index >= len(script_files):
+            print("Can't execute script "+str(script_index+1)+". Reason: Script doesn't exist")
+            return False
+
+        try:
+            with open(script_files[script_index], "r") as script_file:
+                script_code = script_file.read()
+        except:
+            traceback.print_exc()
+            print("Can't execute script "+str(script_index+1)+". Reason: Unable to open file '"+script_files[script_index])+"'"
+            return False
+
+        if script_code == '':
+            print("Can't execute script "+str(script_index+1)+". Reason: Empty script")
+            return False
+
+        selcam_var_def = 'vc_selcam = "'+current_camera+'"\n'
+        script_code = selcam_var_def + script_code
+        # use try to prevent any possible errors in the script from stopping plug-in execution
+        try:
+            exec(script_code)
+            return True
+        except:
+            # Print traceback to inform the user
+            traceback.print_exc()
+            return False
+
+
 # Blender will call this function regularly to keep VCServer working in the background
 def timer_function():
     vcserver = bpy.context.scene.virtucamera.server
@@ -756,6 +865,11 @@ def timer_function():
     else:
         return None # Stop calling this function
 
+# Called whenever the scripts directory path changes
+def update_script_labels(self, context):
+    vcserver = bpy.context.scene.virtucamera.server
+    vcserver.update_script_labels()
+
 class VirtuCameraState(bpy.types.PropertyGroup):
     tcp_port: bpy.props.IntProperty(
         name = "Server TCP Port",
@@ -763,6 +877,13 @@ class VirtuCameraState(bpy.types.PropertyGroup):
         default = 23354,
         min = 0,
         max = 65535
+    )
+    custom_scripts_dir: bpy.props.StringProperty(
+        name = "Scripts",
+        description = "Path to directory containing custom Python scripts to be shown as buttons in the app.\nIf you prefix file names with a number, it will be used to order the buttons\n(e.g.: 1_myscript.py)",
+        default = "",
+        subtype = "DIR_PATH",
+        update = update_script_labels
     )
     server = VCServer(
         platform = "Blender",
@@ -881,3 +1002,6 @@ class VIEW3D_PT_virtucamera_main(bpy.types.Panel):
             column.label(text='Connected: '+server.client_ip, icon='CHECKMARK')
             if server.current_camera:
                 column.label(text=server.current_camera, icon='VIEW_CAMERA')
+        column = layout.column()
+        column.separator()
+        column.prop(state, "custom_scripts_dir")
