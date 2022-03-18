@@ -1,5 +1,5 @@
 # VirtuCameraBlender
-# Copyright (c) 2021 Pablo Javier Garcia Gonzalez.
+# Copyright (c) 2021-2022 Pablo Javier Garcia Gonzalez.
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -38,7 +38,7 @@ import mathutils
 # VirtuCamera API
 from .virtucamera import VCBase, VCServer
 
-plugin_version = (1, 1, 0)
+plugin_version = (1, 1, 1)
 
 class VirtuCameraBlender(VCBase):
     # Constants
@@ -222,7 +222,7 @@ class VirtuCameraBlender(VCBase):
             The current frame number.
         """
 
-        bpy.context.scene.frame_current = frame
+        bpy.context.scene.frame_current = int(frame)
 
 
     def set_playback_range(self, vcserver, start, end):
@@ -238,8 +238,8 @@ class VirtuCameraBlender(VCBase):
             Animation range end frame number.
         """
 
-        bpy.context.scene.frame_start = start
-        bpy.context.scene.frame_end = end
+        bpy.context.scene.frame_start = int(start)
+        bpy.context.scene.frame_end = int(end)
 
 
     def start_playback(self, vcserver, forward):

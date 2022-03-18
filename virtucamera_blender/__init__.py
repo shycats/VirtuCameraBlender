@@ -1,5 +1,5 @@
 # VirtuCameraBlender
-# Copyright (c) 2021 Pablo Javier Garcia Gonzalez.
+# Copyright (c) 2021-2022 Pablo Javier Garcia Gonzalez.
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -27,7 +27,7 @@ bl_info = {
     "author" : "Pablo Garcia",
     "description" : "Live camera motion capture",
     "blender" : (2, 80, 0),
-    "version" : (1, 1, 0),
+    "version" : (1, 1, 1),
     "location" : "3D View > VirtuCamera",
     "warning" : "",
     "category" : "3D View"
