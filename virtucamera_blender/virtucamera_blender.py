@@ -32,13 +32,13 @@ import traceback
 # Blender modules
 import bpy
 import bpy.utils.previews
-import bgl
+import gpu
 import mathutils
 
 # VirtuCamera API
 from .virtucamera import VCBase, VCServer
 
-plugin_version = (1, 1, 1)
+plugin_version = (1, 2, 0)
 
 class VirtuCameraBlender(VCBase):
     # Constants
@@ -58,7 +58,6 @@ class VirtuCameraBlender(VCBase):
 
     # Cached Viewport capture rect
     last_rect_data = None
-
 
     # -- Utility Functions ------------------------------------
 
@@ -117,27 +116,27 @@ class VirtuCameraBlender(VCBase):
         return self.last_rect
 
     def init_capture_buffer(self, width, height):
-        self.buffer = bgl.Buffer(bgl.GL_BYTE, [4, width * height])
+        self.buffer = gpu.types.Buffer('UBYTE', [4, width * height])
         """
-        Based on the C Struct defined in bgl.h for the Buffer object, extract the buffer pointer
+        Based on the C Struct defined in gpu_py_buffer.h for the gpu.types.Buffer object, extract the buffer pointer
 
-        typedef struct _Buffer {
-          PyObject_VAR_HEAD PyObject *parent;
+        typedef struct BPyGPUBuffer {
+          PyObject_VAR_HEAD
+          PyObject *parent;
 
-          int type; /* GL_BYTE, GL_SHORT, GL_INT, GL_FLOAT */
-          int ndimensions;
-          int *dimensions;
+          int format;
+          int shape_len;
+          Py_ssize_t *shape;
 
           union {
-            char *asbyte;
-            short *asshort;
-            int *asint;
-            float *asfloat;
-            double *asdouble;
+            char *as_byte;
+            int *as_int;
+            uint *as_uint;
+            float *as_float;
 
-            void *asvoid;
+            void *as_void;
           } buf;
-        } Buffer;
+        } BPyGPUBuffer;
         """
         # Get the size of the Buffer Python object
         buffer_obj_size = sys.getsizeof(self.buffer)
@@ -147,6 +146,7 @@ class VirtuCameraBlender(VCBase):
         buffer_pointer_addr = id(self.buffer) + buffer_obj_size - buffer_pointer_size
         # Get the actual pointer value as a Python Int
         self.buffer_pointer = (ctypes.c_void_p).from_address(buffer_pointer_addr).value
+
 
     def get_script_files(self):
         scripts_dir = bpy.context.scene.virtucamera.custom_scripts_dir
@@ -618,7 +618,7 @@ class VirtuCameraBlender(VCBase):
         (x, y, width, height) = self.get_view_camera_rect()
         self.init_capture_buffer(width, height)
         vcserver.set_capture_resolution(width, height)
-        vcserver.set_capture_mode(vcserver.CAPMODE_BUFFER_POINTER, vcserver.CAPFORMAT_UBYTE_BGRA)
+        vcserver.set_capture_mode(vcserver.CAPMODE_BUFFER_POINTER, vcserver.CAPFORMAT_UBYTE_RGBA)
         vcserver.set_vertical_flip(True)
 
 
@@ -672,10 +672,10 @@ class VirtuCameraBlender(VCBase):
             vcserver.set_capture_resolution(width, height)
             self.init_capture_buffer(width, height)
 
-        framebuffer = bgl.Buffer(bgl.GL_INT, 1)
-        bgl.glGetIntegerv(bgl.GL_DRAW_FRAMEBUFFER_BINDING, framebuffer)
-        bgl.glBindFramebuffer(bgl.GL_FRAMEBUFFER, framebuffer[0])
-        bgl.glReadPixels(x, y, width, height, bgl.GL_BGRA, bgl.GL_UNSIGNED_BYTE, self.buffer)
+        fb = gpu.state.active_framebuffer_get()
+        with fb.bind():
+            fb.read_color(x, y, width, height, 4, 0, 'UBYTE', data=self.buffer)
+        
         return self.buffer_pointer
 
 
